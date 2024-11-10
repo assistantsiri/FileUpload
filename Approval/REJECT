@@ -1,0 +1,1502 @@
+Table:-
+------------------------------------------------------------------------------------------------------
+
+
+
+CREATE TABLE UploadFile (
+    FileUploadReference NVARCHAR(20) , -- Custom reference number
+    FileName NVARCHAR(255) NOT NULL,
+    FilePath NVARCHAR(255) NOT NULL,
+    UploadedBy NVARCHAR(50),
+    UploadedDate DATETIME DEFAULT GETDATE(),
+    Status VARCHAR(100) DEFAULT 'Pending', -- Approval Status: Pending, Approved, Rejected
+    FileType NVARCHAR(50) -- Dropdown selection: Customer Claim Form, Death Sanction Letter
+
+);
+
+---------------------------------------------------------------------------------------------------------
+
+using Microsoft.Data.SqlClient;
+using Pharmacy_Managment_System.Models;
+using System;
+using System.Collections.Generic;
+
+namespace Pharmacy_Managment_System.Services
+{
+    public class FileRepository
+    {
+        public static string GetConfig()
+        {
+            return "Data Source=LAPTOP-78EOA32A;Integrated Security=true;Initial Catalog=UploadDeathSanction;TrustServerCertificate=True";
+        }
+
+        // Get all files
+        public List<FileUploadViewModel> GetAllFiles()
+        {
+            var _connectionString = GetConfig();
+            var files = new List<FileUploadViewModel>();
+            using (var connection = new SqlConnection(_connectionString))
+            {
+                var query = "SELECT * FROM UploadFile";
+                var command = new SqlCommand(query, connection);
+                connection.Open();
+                using (var reader = command.ExecuteReader())
+                {
+                    while (reader.Read())
+                    {
+                        files.Add(new FileUploadViewModel
+                        {
+                            FileUploadReference = reader["FileUploadReference"].ToString(),
+                            FileName = reader["FileName"].ToString(),
+                            FilePath = reader["FilePath"].ToString(),
+                            UploadedBy = reader["UploadedBy"].ToString(),
+                            UploadedDate = Convert.ToDateTime(reader["UploadedDate"]),
+                            Status = reader["Status"].ToString(),
+                            FileType = reader["FileType"].ToString()
+                        });
+                    }
+                }
+            }
+            return files;
+        }
+
+        // Save a file
+        public void SaveFile(FileUploadViewModel file)
+        {
+            var _connectionString = GetConfig();  // Assume GetConfig() provides the connection string
+            using (var connection = new SqlConnection(_connectionString))
+            {
+                var query = "INSERT INTO UploadFile (FileUploadReference, FileName, FilePath, UploadedBy, UploadedDate, Status, FileType) " +
+                            "VALUES (@FileUploadReference, @FileName, @FilePath, @UploadedBy, @UploadedDate, @Status, @FileType)";
+
+                var command = new SqlCommand(query, connection);
+
+                // Add parameters to avoid SQL injection and ensure data consistency
+                command.Parameters.AddWithValue("@FileUploadReference", file.FileUploadReference);
+                command.Parameters.AddWithValue("@FileName", file.FileName);
+                command.Parameters.AddWithValue("@FilePath", file.FilePath);
+                command.Parameters.AddWithValue("@UploadedBy", file.UploadedBy);
+                command.Parameters.AddWithValue("@UploadedDate", file.UploadedDate);
+                command.Parameters.AddWithValue("@Status", file.Status);
+                command.Parameters.AddWithValue("@FileType", file.FileType);
+
+                // Open the connection, execute the query
+                connection.Open();
+                command.ExecuteNonQuery();
+            }
+        }
+        // Update file status
+        // Update file status
+        public void UpdateFileStatus(string referenceNumber, string status)
+        {
+            var _connectionString = GetConfig();
+            using (var connection = new SqlConnection(_connectionString))
+            {
+                var query = "UPDATE UploadFile SET Status = @status WHERE FileUploadReference = @referenceNumber";
+                var command = new SqlCommand(query, connection);
+                command.Parameters.AddWithValue("@status", status);
+                command.Parameters.AddWithValue("@referenceNumber", referenceNumber);
+
+                connection.Open();
+                command.ExecuteNonQuery();
+            }
+        }
+
+
+        public string GetNextFileUploadReference()
+        {
+            var _connectionString = GetConfig();  // Assume GetConfig() provides the connection string
+            using (var connection = new SqlConnection(_connectionString))
+            {
+                // Query to get the last used reference number
+                var query = "SELECT ISNULL(MAX(CAST(FileUploadReference AS INT)), 0) FROM UploadFile";
+                var command = new SqlCommand(query, connection);
+
+                connection.Open();
+                var lastReference = (int)command.ExecuteScalar();  // Get the last reference number
+
+                // Increment the last reference by 1 to get the next reference number
+                var nextReference = lastReference + 1;
+
+                return nextReference.ToString();  // Return the next reference number as a string
+            }
+        }
+    }
+    }
+--------------------------------------------------------------------------------------------------------------------------
+
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
+using Pharmacy_Managment_System.Models;
+using Pharmacy_Managment_System.Services;
+using System;
+using System.IO;
+using System.Linq;
+
+namespace Pharmacy_Managment_System.Controllers
+{
+    public class UploadFilleController : Controller
+    {
+        private readonly FileRepository _fileRepository;
+        private readonly IWebHostEnvironment _webHostEnvironment;
+
+        public UploadFilleController(FileRepository fileRepository, IWebHostEnvironment webHostEnvironment)
+        {
+            _fileRepository = fileRepository;
+            _webHostEnvironment = webHostEnvironment;
+        }
+
+        // GET: Clerk Upload
+        // GET: Clerk upload page
+        public IActionResult ClerkUpload()
+        {
+            return View();
+        }
+
+        // POST: Clerk file upload
+        [HttpPost]
+        public IActionResult ClerkUpload(IFormFile file, string fileType)
+        {
+            if (file != null && file.Length > 0)
+            {
+                var referenceNumber = _fileRepository.GetNextFileUploadReference(); // Get the next sequential reference number
+                var filePath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot/Uploads", file.FileName);
+
+                // Save the file to disk
+                using (var fileStream = new FileStream(filePath, FileMode.Create))
+                {
+                    file.CopyTo(fileStream);
+                }
+
+                var fileUpload = new FileUploadViewModel
+                {
+                    FileUploadReference = referenceNumber,
+                    FileName = file.FileName,
+                    FilePath = filePath,
+                    UploadedBy = "Clerk",
+                    UploadedDate = DateTime.Now,
+                    Status = "Pending",
+                    FileType = fileType
+                };
+
+                _fileRepository.SaveFile(fileUpload);  // Save the file data to the database
+
+                return RedirectToAction("ClerkUpload");
+            }
+
+            return View();
+        }
+
+
+
+        public IActionResult BranchOfficerPage()
+        {
+            var files = _fileRepository.GetAllFiles(); // Get all files from the database
+            return View(files);
+        }
+
+        // Approve file
+        public IActionResult ApproveFile(string referenceNumber)
+        {
+            _fileRepository.UpdateFileStatus(referenceNumber, "BranchOfficerApproved");
+
+            return RedirectToAction("BranchOfficerPage");
+        }
+
+        // Reject file
+        public IActionResult RejectFile(string referenceNumber)
+        {
+            _fileRepository.UpdateFileStatus(referenceNumber, "BranchOfficerRejected");
+            return RedirectToAction("BranchOfficerPage");
+        }
+
+        // View file (could redirect to a page that shows the file content)
+        public IActionResult ViewFile(string referenceNumber)
+        {
+            var file = _fileRepository.GetAllFiles().FirstOrDefault(f => f.FileUploadReference == referenceNumber);
+            if (file != null)
+            {
+                var filePath = file.FilePath; // You can render the file contents here
+                return File(System.IO.File.ReadAllBytes(filePath), "application/octet-stream", file.FileName); // Or render a specific file type viewer
+            }
+
+            return NotFound();
+        }
+
+        // Download file
+        public IActionResult DownloadFile(string referenceNumber)
+        {
+            var file = _fileRepository.GetAllFiles().FirstOrDefault(f => f.FileUploadReference == referenceNumber);
+            if (file != null)
+            {
+                var filePath = file.FilePath;
+                var fileBytes = System.IO.File.ReadAllBytes(filePath);
+                return File(fileBytes, "application/octet-stream", file.FileName);
+            }
+
+            return NotFound();
+        }
+
+
+
+        public IActionResult BranchManagerPage()
+        {
+            // Get files that are approved by BranchOfficer but not yet approved by BranchManager
+            var filesForApproval = _fileRepository.GetAllFiles()
+                                                  .Where(f => f.Status == "BranchOfficerApproved")
+                                                  .ToList();
+            return View(filesForApproval);
+        }
+
+        public IActionResult ApproveByBranchManager(string referenceNumber)
+        {
+            _fileRepository.UpdateFileStatus(referenceNumber, "BranchManagerApproved");
+
+            return RedirectToAction("BranchManagerPage");
+        }
+
+        public IActionResult RejectByBranchManager(string referenceNumber)
+        {
+            _fileRepository.UpdateFileStatus(referenceNumber, "BranchManagerRejected");
+
+            return RedirectToAction("BranchManagerPage");
+        }
+
+
+
+    }
+}
+---------------------------------------------------------------------------------------------------------------------------
+@{
+    ViewData["Title"] = "Clerk File Upload";
+    Layout = null;
+}
+
+<h2>Upload File</h2>
+
+<!-- Container for the form -->
+<div class="container">
+    <form method="post" enctype="multipart/form-data">
+        <!-- Table to structure the form fields -->
+        <table class="table table-bordered table-striped">
+            <thead>
+                <tr>
+                    <th colspan="2" class="text-center">File Upload Form</th>
+                </tr>
+            </thead>
+            <tbody>
+                <!-- File Upload -->
+                <tr>
+                    <td><label for="file">Select File:</label></td>
+                    <td>
+                        <input type="file" id="file" name="file" class="form-control" required />
+                    </td>
+                </tr>
+
+                <!-- File Type Selection -->
+                <tr>
+                    <td><label for="fileType">File Type:</label></td>
+                    <td>
+                        <select id="fileType" name="fileType" class="form-control" required>
+                            <option value="PDF">PDF</option>
+                            <option value="Word">Word</option>
+                            <option value="Excel">Excel</option>
+                        </select>
+                    </td>
+                </tr>
+            </tbody>
+        </table>
+
+        <!-- Submit Button -->
+        <div class="form-group text-center">
+            <button type="submit" class="btn btn-primary">Upload</button>
+        </div>
+    </form>
+</div>
+
+<!-- Styles to make the form more attractive -->
+<style>
+    /* Centering the container */
+    .container {
+        max-width: 600px;
+        margin: 0 auto;
+        padding: 20px;
+    }
+
+    h2 {
+        text-align: center;
+        color: #333;
+        font-family: 'Arial', sans-serif;
+        font-size: 24px;
+    }
+
+    /* Table styling */
+    .table {
+        width: 100%;
+        margin-top: 20px;
+        border-collapse: collapse;
+        font-family: 'Arial', sans-serif;
+    }
+
+    .table th {
+        background-color: #f2f2f2;
+        text-align: center;
+        color: #333;
+        font-size: 16px;
+        padding: 12px;
+    }
+
+    .table td {
+        padding: 10px;
+        font-size: 14px;
+        color: #555;
+    }
+
+    .table-bordered {
+        border: 1px solid #ddd;
+    }
+
+    .table-striped tbody tr:nth-of-type(odd) {
+        background-color: #f9f9f9;
+    }
+
+    .table-striped tbody tr:nth-of-type(even) {
+        background-color: #fff;
+    }
+
+    /* Button styling */
+    .btn {
+        padding: 10px 20px;
+        font-size: 16px;
+        border-radius: 4px;
+        cursor: pointer;
+        transition: background-color 0.3s ease;
+    }
+
+    .btn-primary {
+        background-color: #007bff;
+        border: none;
+        color: white;
+    }
+
+    .btn-primary:hover {
+        background-color: #0056b3;
+    }
+
+    /* Form label styling */
+    label {
+        font-weight: bold;
+        color: #333;
+    }
+
+    /* Form control styling */
+    .form-control {
+        width: 100%;
+        padding: 8px 12px;
+        font-size: 14px;
+        border: 1px solid #ccc;
+        border-radius: 4px;
+    }
+</style>
+--------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+
+@model List<FileUploadViewModel>
+
+@{
+    ViewData["Title"] = "Branch Officer - File Management";
+    Layout = null;
+}
+
+<h2>@ViewData["Title"]</h2>
+
+<table class="table table-bordered table-striped" style="max-width: 900px; margin: 20px auto;">
+    <thead>
+        <tr>
+            <th>Reference</th>
+            <th>File Name</th>
+            <th>Uploaded By</th>
+            <th>Uploaded Date</th>
+            <th>File Type</th>
+            <th>Status</th>
+            <th>Actions</th>
+        </tr>
+    </thead>
+    <tbody>
+        @foreach (var file in Model)
+        {
+            <tr id="file-@file.FileUploadReference">
+                <td>@file.FileUploadReference</td>
+                <td>@file.FileName</td>
+                <td>@file.UploadedBy</td>
+                <td>@file.UploadedDate.ToString("yyyy-MM-dd")</td>
+                <td>@file.FileType</td>
+                <td>@file.Status</td>
+                <td>
+                    <!-- Approve Button -->
+                    <a href="@Url.Action("ApproveFile", "UploadFille", new { referenceNumber = file.FileUploadReference })"
+                       class="btn btn-success btn-sm"
+                       onclick="approveRejectFile('@file.FileUploadReference', 'Approve')">Approve</a>
+                    <!-- Reject Button -->
+                    <a href="@Url.Action("RejectFile", "UploadFille", new { referenceNumber = file.FileUploadReference })"
+                       class="btn btn-danger btn-sm"
+                       onclick="approveRejectFile('@file.FileUploadReference', 'Reject')">Reject</a>
+                    <br /><br />
+                    <!-- View Button -->
+                    <a href="@Url.Action("ViewFile", "UploadFille", new { referenceNumber = file.FileUploadReference })"
+                       class="btn btn-info btn-sm">View</a>
+                    <!-- Download Button -->
+                    <a href="@Url.Action("DownloadFile", "UploadFille", new { referenceNumber = file.FileUploadReference })"
+                       class="btn btn-primary btn-sm">Download</a>
+                </td>
+            </tr>
+        }
+    </tbody>
+</table>
+
+<script>
+    function approveRejectFile(referenceNumber, actionType) {
+        // Perform the action and then remove the table row
+        var row = document.getElementById('file-' + referenceNumber);
+        if (actionType === 'Approve') {
+            // Simulate the approve action, and then remove the row
+            row.style.backgroundColor = '#d4edda'; // Green background for approved files
+            setTimeout(function () {
+                row.style.display = 'none'; // Hide the row after some time
+            }, 500); // Delay before hiding the row
+        }
+        else if (actionType === 'Reject') {
+            // Simulate the reject action, and then remove the row
+            row.style.backgroundColor = '#f8d7da'; // Red background for rejected files
+            setTimeout(function () {
+                row.style.display = 'none'; // Hide the row after some time
+            }, 500); // Delay before hiding the row
+        }
+    }
+</script>
+
+<style>
+    .table {
+        width: 100%;
+        max-width: 900px;
+        margin: 20px auto;
+        border-collapse: collapse;
+    }
+
+        .table th, .table td {
+            padding: 8px 12px;
+            text-align: left;
+            border: 1px solid #ddd;
+        }
+
+        .table th {
+            background-color: #f2f2f2;
+            font-weight: bold;
+        }
+
+        .table tr:nth-child(even) {
+            background-color: #f9f9f9;
+        }
+
+        .table tr:hover {
+            background-color: #f1f1f1;
+        }
+
+    .btn {
+        padding: 6px 12px;
+        text-decoration: none;
+        margin-right: 5px;
+        border-radius: 4px;
+    }
+
+    .btn-success {
+        background-color: #28a745;
+        color: white;
+    }
+
+    .btn-danger {
+        background-color: #dc3545;
+        color: white;
+    }
+
+    .btn-info {
+        background-color: #17a2b8;
+        color: white;
+    }
+
+    .btn-primary {
+        background-color: #007bff;
+        color: white;
+    }
+
+    .btn-sm {
+        font-size: 12px;
+        padding: 4px 8px;
+    }
+
+    .btn:hover {
+        opacity: 0.8;
+    }
+</style>
+
+
+
+-------------------------------------------------------------------------------------------------------------------------------------
+
+
+@model List<FileUploadViewModel>
+
+@{
+    ViewData["Title"] = "Branch Manager - File Management";
+    Layout = null;
+}
+
+<h2>@ViewData["Title"]</h2>
+
+<table class="table table-bordered table-striped" style="max-width: 900px; margin: 20px auto;">
+    <thead>
+        <tr>
+            <th>Reference</th>
+            <th>File Name</th>
+            <th>Uploaded By</th>
+            <th>Uploaded Date</th>
+            <th>File Type</th>
+            <th>Status</th>
+            <th>Actions</th>
+        </tr>
+    </thead>
+    <tbody>
+        @foreach (var file in Model)
+        {
+                <tr id="file-@file.FileUploadReference">
+                    <td>@file.FileUploadReference</td>
+                    <td>@file.FileName</td>
+                    <td>@file.UploadedBy</td>
+                    <td>@file.UploadedDate.ToString("yyyy-MM-dd")</td>
+                    <td>@file.FileType</td>
+                    <td>@file.Status</td>
+                    <td>
+                        <!-- Approve Button for Branch Manager -->
+                        <a href="@Url.Action("ApproveByBranchManager", "UploadFille", new { referenceNumber = file.FileUploadReference })"
+                           class="btn btn-success btn-sm"
+                           onclick="approveRejectFile('@file.FileUploadReference', 'Approve')">Approve</a>
+                        <!-- Reject Button for Branch Manager -->
+                        <a href="@Url.Action("RejectByBranchManager", "UploadFille", new { referenceNumber = file.FileUploadReference })"
+                           class="btn btn-danger btn-sm"
+                           onclick="approveRejectFile('@file.FileUploadReference', 'Reject')">Reject</a>
+                        <br /><br />
+                        <!-- View Button -->
+                        <a href="@Url.Action("ViewFile", "UploadFille", new { referenceNumber = file.FileUploadReference })"
+                           class="btn btn-info btn-sm">View</a>
+                        <!-- Download Button -->
+                        <a href="@Url.Action("DownloadFile", "UploadFille", new { referenceNumber = file.FileUploadReference })"
+                           class="btn btn-primary btn-sm">Download</a>
+                    </td>
+                </tr>
+        }
+    </tbody>
+</table>
+
+<script>
+    function approveRejectFile(referenceNumber, actionType) {
+        // Perform the action and then remove the table row
+        var row = document.getElementById('file-' + referenceNumber);
+        if (actionType === 'Approve') {
+            // Simulate the approve action, and then remove the row
+            row.style.backgroundColor = '#d4edda'; // Green background for approved files
+            setTimeout(function () {
+                row.style.display = 'none'; // Hide the row after some time
+            }, 500); // Delay before hiding the row
+        }
+        else if (actionType === 'Reject') {
+            // Simulate the reject action, and then remove the row
+            row.style.backgroundColor = '#f8d7da'; // Red background for rejected files
+            setTimeout(function () {
+                row.style.display = 'none'; // Hide the row after some time
+            }, 500); // Delay before hiding the row
+        }
+    }
+</script>
+
+<style>
+    .table {
+        width: 100%;
+        max-width: 900px;
+        margin: 20px auto;
+        border-collapse: collapse;
+    }
+
+        .table th, .table td {
+            padding: 8px 12px;
+            text-align: left;
+            border: 1px solid #ddd;
+        }
+
+        .table th {
+            background-color: #f2f2f2;
+            font-weight: bold;
+        }
+
+        .table tr:nth-child(even) {
+            background-color: #f9f9f9;
+        }
+
+        .table tr:hover {
+            background-color: #f1f1f1;
+        }
+
+    .btn {
+        padding: 6px 12px;
+        text-decoration: none;
+        margin-right: 5px;
+        border-radius: 4px;
+    }
+
+    .btn-success {
+        background-color: #28a745;
+        color: white;
+    }
+
+    .btn-danger {
+        background-color: #dc3545;
+        color: white;
+    }
+
+    .btn-info {
+        background-color: #17a2b8;
+        color: white;
+    }
+
+    .btn-primary {
+        background-color: #007bff;
+        color: white;
+    }
+
+    .btn-sm {
+        font-size: 12px;
+        padding: 4px 8px;
+    }
+
+    .btn:hover {
+        opacity: 0.8;
+    }
+</style>
+
+
+
+-------------------------------------------------------------------------------------------------------------------
+-------------------------------------------------------------------------------------------------------------------
+
+public IActionResult ApproveByBranchManager(string referenceNumber)
+{
+    var file = _fileRepository.GetAllFiles().FirstOrDefault(f => f.FileUploadReference == referenceNumber);
+
+    if (file != null)
+    {
+        // Mark the file as BranchManagerApproved
+        _fileRepository.UpdateFileStatus(referenceNumber, "BranchManagerApproved");
+
+        // Determine the next approval step based on the Amount
+        if (file.Amount < 50000)
+        {
+            // Route to HOOfficer
+            _fileRepository.UpdateFileStatus(referenceNumber, "HOOfficerPending");
+        }
+        else if (file.Amount >= 50000 && file.Amount < 500000)
+        {
+            // Route to ROManager
+            _fileRepository.UpdateFileStatus(referenceNumber, "ROManagerPending");
+        }
+        else if (file.Amount >= 500000)
+        {
+            // Route to COManager
+            _fileRepository.UpdateFileStatus(referenceNumber, "COManagerPending");
+        }
+
+        return RedirectToAction("BranchManagerPage");
+    }
+
+    return NotFound();
+}
+------------------------------------------------------------------------------------------------
+
+public IActionResult HOOfficerPage()
+{
+    var files = _fileRepository.GetAllFiles()
+                               .Where(f => f.Status == "HOOfficerPending")
+                               .ToList();
+    return View(files);
+}
+
+
+-------------------------------------------------------------------------------------------------------
+
+@model List<FileUploadViewModel>
+
+<h2>HO Officer - File Management</h2>
+
+<table class="table table-bordered">
+    <thead>
+        <tr>
+            <th>Reference</th>
+            <th>File Name</th>
+            <th>Uploaded By</th>
+            <th>Amount</th>
+            <th>Status</th>
+            <th>Actions</th>
+        </tr>
+    </thead>
+    <tbody>
+        @foreach (var file in Model)
+        {
+            <tr>
+                <td>@file.FileUploadReference</td>
+                <td>@file.FileName</td>
+                <td>@file.UploadedBy</td>
+                <td>@file.Amount</td>
+                <td>@file.Status</td>
+                <td>
+                    <a href="@Url.Action("ApproveByHOOfficer", "UploadFille", new { referenceNumber = file.FileUploadReference })" class="btn btn-success">Approve</a>
+                    <a href="@Url.Action("RejectByHOOfficer", "UploadFille", new { referenceNumber = file.FileUploadReference })" class="btn btn-danger">Reject</a>
+                </td>
+            </tr>
+        }
+    </tbody>
+</table>
+
+
+--------------------------------------------------------------------------------------------------------------------------------------
+
+ChatGPT 4o mini
+
+Log in
+
+Sign up
+You said:
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
+using Pharmacy_Managment_System.Models;
+using Pharmacy_Managment_System.Services;
+using System;
+using System.IO;
+using System.Linq;
+
+namespace Pharmacy_Managment_System.Controllers
+{
+    public class UploadFilleController : Controller
+    {
+        private readonly FileRepository _fileRepository;
+        private readonly IWebHostEnvironment _webHostEnvironment;
+
+        public UploadFilleController(FileRepository fileRepository, IWebHostEnvironment webHostEnvironment)
+        {
+            _fileRepository = fileRepository;
+            _webHostEnvironment = webHostEnvironment;
+        }
+
+        // GET: Clerk Upload
+        // GET: Clerk upload page
+        public IActionResult ClerkUpload()
+        {
+            return View();
+        }
+
+        // POST: Clerk file upload
+        [HttpPost]
+        public IActionResult ClerkUpload(IFormFile file, string fileType)
+        {
+            if (file != null && file.Length > 0)
+            {
+                var referenceNumber = _fileRepository.GetNextFileUploadReference(); // Get the next sequential reference number
+                var filePath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot/Uploads", file.FileName);
+
+                // Save the file to disk
+                using (var fileStream = new FileStream(filePath, FileMode.Create))
+                {
+                    file.CopyTo(fileStream);
+                }
+
+                var fileUpload = new FileUploadViewModel
+                {
+                    FileUploadReference = referenceNumber,
+                    FileName = file.FileName,
+                    FilePath = filePath,
+                    UploadedBy = "Clerk",
+                    UploadedDate = DateTime.Now,
+                    Status = "Pending",
+                    FileType = fileType
+                };
+
+                _fileRepository.SaveFile(fileUpload);  // Save the file data to the database
+
+                return RedirectToAction("ClerkUpload");
+            }
+
+            return View();
+        }
+
+
+
+        public IActionResult BranchOfficerPage()
+        {
+            var files = _fileRepository.GetAllFiles(); // Get all files from the database
+            return View(files);
+        }
+
+        // Approve file
+        public IActionResult ApproveFile(string referenceNumber)
+        {
+            _fileRepository.UpdateFileStatus(referenceNumber, "BranchOfficerApproved");
+
+            return RedirectToAction("BranchOfficerPage");
+        }
+
+        // Reject file
+        public IActionResult RejectFile(string referenceNumber)
+        {
+            _fileRepository.UpdateFileStatus(referenceNumber, "BranchOfficerRejected");
+            return RedirectToAction("BranchOfficerPage");
+        }
+
+        // View file (could redirect to a page that shows the file content)
+        public IActionResult ViewFile(string referenceNumber)
+        {
+            var file = _fileRepository.GetAllFiles().FirstOrDefault(f => f.FileUploadReference == referenceNumber);
+            if (file != null)
+            {
+                var filePath = file.FilePath; // You can render the file contents here
+                return File(System.IO.File.ReadAllBytes(filePath), "application/octet-stream", file.FileName); // Or render a specific file type viewer
+            }
+
+            return NotFound();
+        }
+
+        // Download file
+        public IActionResult DownloadFile(string referenceNumber)
+        {
+            var file = _fileRepository.GetAllFiles().FirstOrDefault(f => f.FileUploadReference == referenceNumber);
+            if (file != null)
+            {
+                var filePath = file.FilePath;
+                var fileBytes = System.IO.File.ReadAllBytes(filePath);
+                return File(fileBytes, "application/octet-stream", file.FileName);
+            }
+
+            return NotFound();
+        }
+
+
+
+        public IActionResult BranchManagerPage()
+        {
+            // Get files that are approved by BranchOfficer but not yet approved by BranchManager
+            var filesForApproval = _fileRepository.GetAllFiles()
+                                                  .Where(f => f.Status == "BranchOfficerApproved")
+                                                  .ToList();
+            return View(filesForApproval);
+        }
+
+        public IActionResult ApproveByBranchManager(string referenceNumber)
+        {
+            _fileRepository.UpdateFileStatus(referenceNumber, "BranchManagerApproved");
+
+            return RedirectToAction("BranchManagerPage");
+        }
+        public IActionResult RejectByBranchManager(string referenceNumber)
+        {
+            _fileRepository.UpdateFileStatus(referenceNumber, "BranchManagerRejected");
+
+            return RedirectToAction("BranchManagerPage");
+        }
+
+
+
+    }
+}
+
+
+Here  I want to display Data after Branchofficer Approve  in BranchManager page for Approval and Reject
+
+---------------------------------------------------------------
+
+Refer below Branch officer View :-
+
+@model List<FileUploadViewModel>
+
+@{
+    ViewData["Title"] = "Branch Officer - File Management";
+    Layout = null;
+}
+
+<h2>@ViewData["Title"]</h2>
+
+<table class="table table-bordered table-striped" style="max-width: 900px; margin: 20px auto;">
+    <thead>
+        <tr>
+            <th>Reference</th>
+            <th>File Name</th>
+            <th>Uploaded By</th>
+            <th>Uploaded Date</th>
+            <th>File Type</th>
+            <th>Status</th>
+            <th>Actions</th>
+        </tr>
+    </thead>
+    <tbody>
+        @foreach (var file in Model)
+        {
+            <tr id="file-@file.FileUploadReference">
+                <td>@file.FileUploadReference</td>
+                <td>@file.FileName</td>
+                <td>@file.UploadedBy</td>
+                <td>@file.UploadedDate.ToString("yyyy-MM-dd")</td>
+                <td>@file.FileType</td>
+                <td>@file.Status</td>
+                <td>
+                    <!-- Approve Button -->
+                    <a href="@Url.Action("ApproveFile", "UploadFille", new { referenceNumber = file.FileUploadReference })"
+                       class="btn btn-success btn-sm"
+                       onclick="approveRejectFile('@file.FileUploadReference', 'Approve')">Approve</a>
+                    <!-- Reject Button -->
+                    <a href="@Url.Action("RejectFile", "UploadFille", new { referenceNumber = file.FileUploadReference })"
+                       class="btn btn-danger btn-sm"
+                       onclick="approveRejectFile('@file.FileUploadReference', 'Reject')">Reject</a>
+                    <br /><br />
+                    <!-- View Button -->
+                    <a href="@Url.Action("ViewFile", "UploadFille", new { referenceNumber = file.FileUploadReference })"
+                       class="btn btn-info btn-sm">View</a>
+                    <!-- Download Button -->
+                    <a href="@Url.Action("DownloadFile", "UploadFille", new { referenceNumber = file.FileUploadReference })"
+                       class="btn btn-primary btn-sm">Download</a>
+                </td>
+            </tr>
+        }
+    </tbody>
+</table>
+
+<script>
+    function approveRejectFile(referenceNumber, actionType) {
+        // Perform the action and then remove the table row
+        var row = document.getElementById('file-' + referenceNumber);
+        if (actionType === 'Approve') {
+            // Simulate the approve action, and then remove the row
+            row.style.backgroundColor = '#d4edda'; // Green background for approved files
+            setTimeout(function () {
+                row.style.display = 'none'; // Hide the row after some time
+            }, 500); // Delay before hiding the row
+        }
+        else if (actionType === 'Reject') {
+            // Simulate the reject action, and then remove the row
+            row.style.backgroundColor = '#f8d7da'; // Red background for rejected files
+            setTimeout(function () {
+                row.style.display = 'none'; // Hide the row after some time
+            }, 500); // Delay before hiding the row
+        }
+    }
+</script>
+
+<style>
+    .table {
+        width: 100%;
+        max-width: 900px;
+        margin: 20px auto;
+        border-collapse: collapse;
+    }
+
+        .table th, .table td {
+            padding: 8px 12px;
+            text-align: left;
+            border: 1px solid #ddd;
+        }
+
+        .table th {
+            background-color: #f2f2f2;
+            font-weight: bold;
+        }
+
+        .table tr:nth-child(even) {
+            background-color: #f9f9f9;
+        }
+
+        .table tr:hover {
+            background-color: #f1f1f1;
+        }
+
+    .btn {
+        padding: 6px 12px;
+        text-decoration: none;
+        margin-right: 5px;
+        border-radius: 4px;
+    }
+
+    .btn-success {
+        background-color: #28a745;
+        color: white;
+    }
+
+    .btn-danger {
+        background-color: #dc3545;
+        color: white;
+    }
+
+    .btn-info {
+        background-color: #17a2b8;
+        color: white;
+    }
+
+    .btn-primary {
+        background-color: #007bff;
+        color: white;
+    }
+
+    .btn-sm {
+        font-size: 12px;
+        padding: 4px 8px;
+    }
+
+    .btn:hover {
+        opacity: 0.8;
+    }
+</style>
+
+
+
+
+
+
+
+
+ChatGPT said:
+ChatGPT
+To ensure that the BranchManagerPage shows only files that have been approved by the Branch Officer and are pending approval by the Branch Manager, you need to:
+
+Modify the BranchManagerPage action in your controller to fetch the files with status "BranchOfficerApproved".
+Update the view for the Branch Manager to display the appropriate files with options to approve or reject them.
+Step 1: Modify the BranchManagerPage action in the Controller
+In your UploadFilleController, you're already filtering the files to only show those that are "BranchOfficerApproved". Make sure the status is properly handled:
+
+csharp
+Copy code
+public IActionResult BranchManagerPage()
+{
+    // Get files that are approved by Branch Officer but not yet approved by Branch Manager
+    var filesForApproval = _fileRepository.GetAllFiles()
+                                          .Where(f => f.Status == "BranchOfficerApproved")
+                                          .ToList();
+    return View(filesForApproval);
+}
+This code will make sure only files that have passed the Branch Officer's approval and are awaiting Branch Manager approval will appear on the Branch Manager's page.
+
+Step 2: Create or Update the BranchManagerPage View
+Now you need to create the BranchManagerPage.cshtml view to display these files and provide options to approve or reject them. Below is a simple example of how to set this up:
+
+html
+Copy code
+@model List<FileUploadViewModel>
+
+@{
+    ViewData["Title"] = "Branch Manager - File Management";
+    Layout = null;
+}
+
+<h2>@ViewData["Title"]</h2>
+
+<table class="table table-bordered table-striped" style="max-width: 900px; margin: 20px auto;">
+    <thead>
+        <tr>
+            <th>Reference</th>
+            <th>File Name</th>
+            <th>Uploaded By</th>
+            <th>Uploaded Date</th>
+            <th>File Type</th>
+            <th>Status</th>
+            <th>Actions</th>
+        </tr>
+    </thead>
+    <tbody>
+        @foreach (var file in Model)
+        {
+            <tr id="file-@file.FileUploadReference">
+                <td>@file.FileUploadReference</td>
+                <td>@file.FileName</td>
+                <td>@file.UploadedBy</td>
+                <td>@file.UploadedDate.ToString("yyyy-MM-dd")</td>
+                <td>@file.FileType</td>
+                <td>@file.Status</td>
+                <td>
+                    <!-- Approve Button for Branch Manager -->
+                    <a href="@Url.Action("ApproveByBranchManager", "UploadFille", new { referenceNumber = file.FileUploadReference })"
+                       class="btn btn-success btn-sm"
+                       onclick="approveRejectFile('@file.FileUploadReference', 'Approve')">Approve</a>
+                    <!-- Reject Button for Branch Manager -->
+                    <a href="@Url.Action("RejectByBranchManager", "UploadFille", new { referenceNumber = file.FileUploadReference })"
+                       class="btn btn-danger btn-sm"
+                       onclick="approveRejectFile('@file.FileUploadReference', 'Reject')">Reject</a>
+                    <br /><br />
+                    <!-- View Button -->
+                    <a href="@Url.Action("ViewFile", "UploadFille", new { referenceNumber = file.FileUploadReference })"
+                       class="btn btn-info btn-sm">View</a>
+                    <!-- Download Button -->
+                    <a href="@Url.Action("DownloadFile", "UploadFille", new { referenceNumber = file.FileUploadReference })"
+                       class="btn btn-primary btn-sm">Download</a>
+                </td>
+            </tr>
+        }
+    </tbody>
+</table>
+
+<script>
+    function approveRejectFile(referenceNumber, actionType) {
+        // Perform the action and then remove the table row
+        var row = document.getElementById('file-' + referenceNumber);
+        if (actionType === 'Approve') {
+            // Simulate the approve action, and then remove the row
+            row.style.backgroundColor = '#d4edda'; // Green background for approved files
+            setTimeout(function () {
+                row.style.display = 'none'; // Hide the row after some time
+            }, 500); // Delay before hiding the row
+        }
+        else if (actionType === 'Reject') {
+            // Simulate the reject action, and then remove the row
+            row.style.backgroundColor = '#f8d7da'; // Red background for rejected files
+            setTimeout(function () {
+                row.style.display = 'none'; // Hide the row after some time
+            }, 500); // Delay before hiding the row
+        }
+    }
+</script>
+
+<style>
+    .table {
+        width: 100%;
+        max-width: 900px;
+        margin: 20px auto;
+        border-collapse: collapse;
+    }
+
+        .table th, .table td {
+            padding: 8px 12px;
+            text-align: left;
+            border: 1px solid #ddd;
+        }
+
+        .table th {
+            background-color: #f2f2f2;
+            font-weight: bold;
+        }
+
+        .table tr:nth-child(even) {
+            background-color: #f9f9f9;
+        }
+
+        .table tr:hover {
+            background-color: #f1f1f1;
+        }
+
+    .btn {
+        padding: 6px 12px;
+        text-decoration: none;
+        margin-right: 5px;
+        border-radius: 4px;
+    }
+
+    .btn-success {
+        background-color: #28a745;
+        color: white;
+    }
+
+    .btn-danger {
+        background-color: #dc3545;
+        color: white;
+    }
+
+    .btn-info {
+        background-color: #17a2b8;
+        color: white;
+    }
+
+    .btn-primary {
+        background-color: #007bff;
+        color: white;
+    }
+
+    .btn-sm {
+        font-size: 12px;
+        padding: 4px 8px;
+    }
+
+    .btn:hover {
+        opacity: 0.8;
+    }
+</style>
+Key Changes:
+The BranchManagerPage view is now set up to display files that have already been approved by the Branch Officer (Status == "BranchOfficerApproved").
+The table allows the Branch Manager to either approve or reject files with respective buttons.
+Actions like Approve and Reject are linked to their respective controller methods (ApproveByBranchManager and RejectByBranchManager).
+Step 3: Update the Controller Methods for Branch Manager Actions
+To handle the approval or rejection, you need to update the file status when a Branch Manager approves or rejects a file:
+
+csharp
+Copy code
+public IActionResult ApproveByBranchManager(string referenceNumber)
+{
+    _fileRepository.UpdateFileStatus(referenceNumber, "BranchManagerApproved");
+
+    return RedirectToAction("BranchManagerPage");
+}
+
+public IActionResult RejectByBranchManager(string referenceNumber)
+{
+    _fileRepository.UpdateFileStatus(referenceNumber, "BranchManagerRejected");
+
+    return RedirectToAction("BranchManagerPage");
+}
+These methods update the file status in the database and then redirect the Branch Manager back to the BranchManagerPage to view the updated list of files.
+
+Final Thoughts:
+This setup ensures that files are processed through the Branch Officer first, and then through the Branch Manager for final approval.
+The approveRejectFile JavaScript function allows for a smooth user experience by immediately reflecting the action (approve/reject) visually in the table before the page reloads.
+The BranchManagerPage view is specifically tailored to show only those files that are pending the Branch Manager's review, improving clarity and workflow efficiency.
+Let me know if you need further adjustments!
+
+
+
+You said:
+
+
+After  BranchManagerApproved  I want to Display data like :-
+
+if Amount is less than 50 thousand then it will go for Approval in HOOfficer
+if Amount is Above 50 thousand and below 5 lakh then it will go for Approval in  ROManager
+if Amount is Above 5 lakh then  it will go for approval in COManager
+-------------------------------------------------------------------------------------------
+
+After ROManager Approval it will go in HOOfficer approval
+ and after COManager Approval it will go for  HOOfficer approval
+ChatGPT said:
+ChatGPT
+To implement this approval flow with different conditions based on the Amount, you will need to follow a set of steps. After the BranchManagerApproved state, the system needs to route the file for further approval based on the Amount. Here's how you can approach this:
+
+Workflow Overview
+Branch Manager Approval: Once the Branch Manager approves a file, the system checks the Amount and routes it to different approval levels:
+
+If Amount < 50,000, route to HOOfficer for approval.
+If 50,000 <= Amount < 500,000, route to ROManager for approval.
+If Amount >= 500,000, route to COManager for approval.
+After ROManager Approval: Once approved by the ROManager, it should go for HOOfficer approval.
+
+After COManager Approval: Similarly, after approval by the COManager, it should go for HOOfficer approval.
+
+HOOfficer Approval: The final approval goes to the HOOfficer. After this approval, the file can be marked as fully approved or rejected based on the final decision.
+
+Step 1: Update File Model
+Ensure that your file model (FileUploadViewModel) has an Amount property, as you will use it to determine where to route the approval process.
+
+csharp
+Copy code
+public class FileUploadViewModel
+{
+    public int FileUploadReference { get; set; }
+    public string FileName { get; set; }
+    public string FilePath { get; set; }
+    public string UploadedBy { get; set; }
+    public DateTime UploadedDate { get; set; }
+    public string Status { get; set; }  // Status could be "BranchManagerApproved", etc.
+    public string FileType { get; set; }
+    public decimal Amount { get; set; }  // The amount for approval routing
+}
+Step 2: Modify Branch Manager Approval Logic
+When the Branch Manager approves a file, you need to determine the next approval route based on the Amount.
+
+csharp
+Copy code
+public IActionResult ApproveByBranchManager(string referenceNumber)
+{
+    var file = _fileRepository.GetAllFiles().FirstOrDefault(f => f.FileUploadReference == referenceNumber);
+
+    if (file != null)
+    {
+        // Mark the file as BranchManagerApproved
+        _fileRepository.UpdateFileStatus(referenceNumber, "BranchManagerApproved");
+
+        // Determine the next approval step based on the Amount
+        if (file.Amount < 50000)
+        {
+            // Route to HOOfficer
+            _fileRepository.UpdateFileStatus(referenceNumber, "HOOfficerPending");
+        }
+        else if (file.Amount >= 50000 && file.Amount < 500000)
+        {
+            // Route to ROManager
+            _fileRepository.UpdateFileStatus(referenceNumber, "ROManagerPending");
+        }
+        else if (file.Amount >= 500000)
+        {
+            // Route to COManager
+            _fileRepository.UpdateFileStatus(referenceNumber, "COManagerPending");
+        }
+
+        return RedirectToAction("BranchManagerPage");
+    }
+
+    return NotFound();
+}
+Step 3: Create Views for HOOfficer, ROManager, and COManager
+Now you need views for HOOfficer, ROManager, and COManager to approve or reject files. These views will display only the files that are pending approval by the respective role.
+
+HOOfficer Page
+csharp
+Copy code
+public IActionResult HOOfficerPage()
+{
+    var files = _fileRepository.GetAllFiles()
+                               .Where(f => f.Status == "HOOfficerPending")
+                               .ToList();
+    return View(files);
+}
+HOOfficerPage.cshtml:
+
+html
+Copy code
+@model List<FileUploadViewModel>
+
+<h2>HO Officer - File Management</h2>
+
+<table class="table table-bordered">
+    <thead>
+        <tr>
+            <th>Reference</th>
+            <th>File Name</th>
+            <th>Uploaded By</th>
+            <th>Amount</th>
+            <th>Status</th>
+            <th>Actions</th>
+        </tr>
+    </thead>
+    <tbody>
+        @foreach (var file in Model)
+        {
+            <tr>
+                <td>@file.FileUploadReference</td>
+                <td>@file.FileName</td>
+                <td>@file.UploadedBy</td>
+                <td>@file.Amount</td>
+                <td>@file.Status</td>
+                <td>
+                    <a href="@Url.Action("ApproveByHOOfficer", "UploadFille", new { referenceNumber = file.FileUploadReference })" class="btn btn-success">Approve</a>
+                    <a href="@Url.Action("RejectByHOOfficer", "UploadFille", new { referenceNumber = file.FileUploadReference })" class="btn btn-danger">Reject</a>
+                </td>
+            </tr>
+        }
+    </tbody>
+</table>
+ROManager and COManager Pages
+Similar to HOOfficerPage, create ROManagerPage and COManagerPage views to handle approval for ROManager and COManager respectively.
+
+Step 4: Update the Controller for Approvals
+You will need to implement actions for the HOOfficer, ROManager, and COManager approvals. After one of them approves, the file should go to the next step in the approval process.
+
+HOOfficer Approval
+csharp
+Copy code
+public IActionResult ApproveByHOOfficer(string referenceNumber)
+{
+    var file = _fileRepository.GetAllFiles().FirstOrDefault(f => f.FileUploadReference == referenceNumber);
+
+    if (file != null)
+    {
+        // Check the current status and route it accordingly
+        if (file.Status == "ROManagerApproved")
+        {
+            // ROManager approved, now it goes to HOOfficer
+            _fileRepository.UpdateFileStatus(referenceNumber, "HOOfficerApproved");
+        }
+        else if (file.Status == "COManagerApproved")
+        {
+            // COManager approved, now it goes to HOOfficer
+            _fileRepository.UpdateFileStatus(referenceNumber, "HOOfficerApproved");
+        }
+
+        return RedirectToAction("HOOfficerPage");
+    }
+
+    return NotFound();
+}
+ROManager Approval
+csharp
+Copy code
+public IActionResult ApproveByROManager(string referenceNumber)
+{
+    var file = _fileRepository.GetAllFiles().FirstOrDefault(f => f.FileUploadReference == referenceNumber);
+
+    if (file != null)
+    {
+        // Mark the file as approved by ROManager
+        _fileRepository.UpdateFileStatus(referenceNumber, "ROManagerApproved");
+
+        // Now route it to HOOfficer for the next approval
+        _fileRepository.UpdateFileStatus(referenceNumber, "HOOfficerPending");
+
+        return RedirectToAction("ROManagerPage");
+    }
+
+    return NotFound();
+}
+COManager Approval
+csharp
+Copy code
+public IActionResult ApproveByCOManager(string referenceNumber)
+{
+    var file = _fileRepository.GetAllFiles().FirstOrDefault(f => f.FileUploadReference == referenceNumber);
+
+    if (file != null)
+    {
+        // Mark the file as approved by COManager
+        _fileRepository.UpdateFileStatus(referenceNumber, "COManagerApproved");
+
+        // Now route it to HOOfficer for the next approval
+        _fileRepository.UpdateFileStatus(referenceNumber, "HOOfficerPending");
+
+        return RedirectToAction("COManagerPage");
+    }
+
+    return NotFound();
+}
+Step 5: Final HOOfficer Approval
+After HOOfficer approval, you can mark the file as fully approved, and the workflow will be complete. You might need a final status like FullyApproved.
+
+csharp
+Copy code
+public IActionResult FinalApprovalByHOOfficer(string referenceNumber)
+{
+    var file = _fileRepository.GetAllFiles().FirstOrDefault(f => f.FileUploadReference == referenceNumber);
+
+    if (file != null)
+    {
+        // Final approval by HOOfficer
+        _fileRepository.UpdateFileStatus(referenceNumber, "FullyApproved");
+
+        return RedirectToAction("HOOfficerPage");
+    }
+
+    return NotFound();
+}
+Conclusion
+The ApproveByBranchManager method now checks the Amount and determines whether the file should go to HOOfficer, ROManager, or COManager.
+Each manager's approval process is handled in their respective views and controllers, routing the file as needed.
+After approval by ROManager or COManager, the file will be forwarded to HOOfficer for final approval.
+Finally, once the HOOfficer approves, the file is marked as FullyApproved.
+This flow allows dynamic routing based on the Amount and ensures that files go through the necessary approval steps based on their value.
+
+Let me know if you need further adjustments!
+
+
+
+
+
+
+ChatGPT can make mistakes. Check important info.
+?
